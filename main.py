@@ -2,75 +2,71 @@ import telebot
 from flask import Flask, request
 import os
 
-# Render братиме ці дані зі своїх безпечних налаштувань
+# Отримуємо змінні з налаштувань Render
 TOKEN = os.environ.get('TOKEN')
-URL = os.environ.get('RENDER_EXTERNAL_URL') 
+URL = os.environ.get('RENDER_EXTERNAL_URL')
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
+# Обробник команди /start (для перевірки)
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "👋 <b>Привіт! Бот працює на Render!</b>", parse_mode="HTML")
+    bot.reply_to(message, "Бот працює і готовий приймати заявки! ✅")
 
+# ОСНОВНИЙ ОБРОБНИК ЗАЯВОК НА ВСТУП
 @bot.chat_join_request_handler()
 def handle_join_request(message):
-    chat_id = message.chat.id
     user_id = message.from_user.id
+    chat_id = message.chat.id
     user_name = message.from_user.first_name
 
-    welcome_text = (
-        f"Привіт, {user_name}!\n\n"
-        f"Ти подав заявку до чату <b>{message.chat.title}</b>.\n"
-        f"Будь ласка, уважно ознайомся з <b>Правилами чату</b> та <b>Пам'яткою про БПЛА</b>.\n\n"
-        f"Натисни кнопку нижче, якщо ти згоден 👇"
-    )
+    text = f"Привіт, {user_name}! Щоб вступити до групи, ознайомтесь з правилами."
+    
+    # Створюємо кнопку
+    markup = telebot.types.InlineKeyboardMarkup()
+    btn = telebot.types.InlineKeyboardButton("✅ Я згоден з правилами", callback_data=f"approve_{chat_id}_{user_id}")
+    markup.add(btn)
 
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    btn = telebot.types.InlineKeyboardButton(text="✅ Я згоден з правилами", callback_data=f"agree_{chat_id}")
-    keyboard.add(btn)
-
+    # Надсилаємо правила (важливо: картинки мають лежати в тій же папці на GitHub)
     try:
-        bot.send_message(user_id, welcome_text, reply_markup=keyboard, parse_mode="HTML")
-        
-        rules_path = os.path.join(BASE_DIR, 'rules.jpg')
-        if os.path.exists(rules_path):
-            with open(rules_path, 'rb') as photo:
-                bot.send_photo(user_id, photo)
-
-        memo_path = os.path.join(BASE_DIR, 'memo.jpg')
-        if os.path.exists(memo_path):
-            with open(memo_path, 'rb') as photo:
-                bot.send_photo(user_id, photo)
+        # Спробуємо надіслати фото
+        if os.path.exists('rules.jpg'):
+            with open('rules.jpg', 'rb') as photo:
+                bot.send_photo(user_id, photo, caption=text, reply_markup=markup)
+        else:
+            bot.send_message(user_id, text, reply_markup=markup)
     except Exception as e:
-        print(f"Помилка: {e}")
+        print(f"Помилка відправки: {e}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('agree_'))
-def click_agree(call):
-    chat_id = call.data.split('_')[1]
-    user_id = call.from_user.id
+# Обробка натискання кнопки
+@bot.callback_query_handler(func=lambda call: call.data.startswith('approve_'))
+def approve_request(call):
+    data = call.data.split('_')
+    chat_id = int(data[1])
+    user_id = int(data[2])
+    
     try:
         bot.approve_chat_join_request(chat_id, user_id)
-        bot.edit_message_text("🎉 Тебе успішно прийнято до групи!", chat_id=user_id, message_id=call.message.message_id)
-    except Exception:
-        bot.edit_message_text("Упс! Заявка вже недійсна.", chat_id=user_id, message_id=call.message.message_id)
-    bot.answer_callback_query(call.id)
+        bot.answer_callback_query(call.id, "Заявку схвалено!")
+        bot.edit_message_text("Ви прийняті до групи! 🎉", call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        bot.answer_callback_query(call.id, "Сталася помилка, спробуйте ще раз.")
+        print(f"Помилка схвалення: {e}")
 
+# Вебхук для Flask
 @app.route('/' + TOKEN, methods=['POST'])
-def getMessage():
+def webhook():
     json_string = request.get_data().decode('utf-8')
     update = telebot.types.Update.de_json(json_string)
     bot.process_new_updates([update])
-    return "!", 200
+    return "OK", 200
 
-# Головна сторінка, яка активує бота
 @app.route('/')
-def webhook():
+def index():
     bot.remove_webhook()
     bot.set_webhook(url=URL + '/' + TOKEN)
-    return "🚀 Бот успішно запущений і підключений до Telegram!", 200
+    return "Бот активний!", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
